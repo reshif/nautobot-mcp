@@ -10,6 +10,7 @@ from nautobot_mcp.tools.workflows import (
     _ip_allocate,
     _rack,
     _site_report,
+    _vlan_allocate,
 )
 from tests.fakes import FakeGateway
 
@@ -29,6 +30,40 @@ async def test_data_quality_audit_aggregates_counts():
         "devices_without_software_version", "prefixes_without_role", "ip_addresses_unassigned"}
     assert all(v == 3 for v in r.data["findings"].values())
     assert r.data["ranked"][0] in r.data["findings"]
+
+
+async def test_data_quality_audit_reports_progress_per_check():
+    from nautobot_mcp.core.progress import Progress
+
+    class Recorder(Progress):
+        def __init__(self):
+            super().__init__(None)
+            self.steps: list[str] = []
+            self.total = None
+
+        def start(self, total):
+            self.total = total
+
+        async def step(self, message, *, advance=1.0):
+            self.steps.append(message)
+
+    gw = FakeGateway(get_map={"dcim/devices/": lambda p: {"count": 1},
+                              "ipam/prefixes/": lambda p: {"count": 1},
+                              "ipam/ip-addresses/": lambda p: {"count": 1}})
+    rec = Recorder()
+    await _data_quality_audit(app(gw), progress=rec)
+    assert rec.total == 6 and len(rec.steps) == 6  # one step per check, total set upfront
+
+
+async def test_vlan_allocate_suggests_next_free_vid():
+    gw = FakeGateway(list_map={"ipam/vlans/": [{"vid": 1}, {"vid": 2}, {"vid": 3}]})
+    r = await _vlan_allocate(app(gw), vlan_group="core", count=2)
+    assert r.data["suggested_vids"] == [4, 5] and r.data["used_count"] == 3
+
+
+async def test_vlan_allocate_requires_scope():
+    r = await _vlan_allocate(app(FakeGateway()))
+    assert r.error is not None and r.error.kind.value == "invalid_input"
 
 
 async def test_device_readiness_flags_missing_fields():

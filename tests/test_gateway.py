@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from nautobot_mcp.core.catalog import PATHS, RESOLVABLE
-from nautobot_mcp.core.errors import NautobotApiError, NautobotTimeoutError
+from nautobot_mcp.core.errors import NautobotApiError, NautobotTimeoutError, NautobotValidationError
 from nautobot_mcp.core.gateway import NautobotGateway
 
 
@@ -51,6 +51,16 @@ async def test_non_retryable_4xx_raises_immediately():
     with pytest.raises(NautobotApiError):
         await gw.get("dcim/devices/x/")
     assert calls["n"] == 1  # 404 is not retried
+
+
+async def test_400_is_validation_error_with_fields():
+    def handler(_req):
+        return httpx.Response(400, json={"site": ["Unknown filter field"]})
+
+    gw = _gw(handler)
+    with pytest.raises(NautobotValidationError) as ei:
+        await gw.get("dcim/devices/", {"site": "x"})
+    assert ei.value.status == 400 and ei.value.fields == {"site": ["Unknown filter field"]}
 
 
 async def test_timeout_is_retried_then_normalized():

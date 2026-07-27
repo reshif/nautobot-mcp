@@ -22,25 +22,25 @@ def _dump(rows: list, keys: tuple[str, ...], label: str) -> str:
 
 
 def register_resources(mcp: FastMCP, _settings: Settings) -> None:
-    @mcp.resource("nautobot://locations", name="Nautobot locations",
+    @mcp.resource("nautobot://locations", name="Nautobot locations", title="Nautobot Locations",
                   description="Locations/sites: id, name, type, device_count.", mime_type="application/json")
     async def locations() -> str:
         rows = await process_app().resolver.reference("dcim/locations/", cap=1000)
         return _dump(rows, ("id", "name", "location_type", "device_count", "status"), "locations")
 
-    @mcp.resource("nautobot://device-roles", name="Nautobot device roles",
+    @mcp.resource("nautobot://device-roles", name="Nautobot device roles", title="Nautobot Device Roles",
                   description="Device roles: id, name.", mime_type="application/json")
     async def device_roles() -> str:
         rows = await process_app().resolver.reference("extras/roles/?content_types=dcim.device", cap=500)
         return _dump(rows, ("id", "name"), "roles")
 
-    @mcp.resource("nautobot://statuses", name="Nautobot statuses",
+    @mcp.resource("nautobot://statuses", name="Nautobot statuses", title="Nautobot Statuses",
                   description="Statuses (all content types): id, name.", mime_type="application/json")
     async def statuses() -> str:
         rows = await process_app().resolver.reference("extras/statuses/", cap=500)
         return _dump(rows, ("id", "name"), "statuses")
 
-    @mcp.resource("nautobot://manufacturers", name="Nautobot manufacturers",
+    @mcp.resource("nautobot://manufacturers", name="Nautobot manufacturers", title="Nautobot Manufacturers",
                   description="Manufacturers: id, name, device_type_count.", mime_type="application/json")
     async def manufacturers() -> str:
         rows = await process_app().resolver.reference("dcim/manufacturers/", cap=500)

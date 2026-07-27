@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from ._shared import AppContext, Collector, Response, ToolResult, register_tool, ro
 
@@ -15,7 +16,10 @@ _DESC = (
 )
 
 
-async def _status_overview(app: AppContext, group_by: Literal["status", "role", "location"] = "status") -> ToolResult:
+async def _status_overview(
+    app: AppContext,
+    group_by: Annotated[Literal["status", "role", "location"], Field(description="Dimension to group the device counts by.")] = "status",
+) -> ToolResult:
     gw = app.gateway
     c = Collector()
 

@@ -6,8 +6,14 @@ from typing import Any
 
 
 def disp(obj: Any) -> Any:
-    """The display string of a nested related object (depth=1), else the value itself."""
-    return obj.get("display") if isinstance(obj, dict) else obj
+    """Human label of a nested value, else the value itself.
+
+    Handles both related objects (depth=1, `display`) and choice fields
+    (`{value, label}`, as Nautobot renders enums like interface `type`/`mode`).
+    """
+    if isinstance(obj, dict):
+        return obj.get("display") or obj.get("label") or obj.get("value")
+    return obj
 
 
 def filters(*pairs: tuple[str, Any]) -> dict[str, Any]:

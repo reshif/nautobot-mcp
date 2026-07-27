@@ -6,11 +6,23 @@ compliance configs. Enabled with NAUTOBOT_MCP_ENABLE_OPTIONAL_TOOLS=true.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
-from .._shared import AppContext, Collector, Response, ToolResult, Trimmer, disp, register_tool, ro
+from .._params import Device, OptLocation
+from .._shared import (
+    AppContext,
+    Collector,
+    Response,
+    ToolResult,
+    Trimmer,
+    disp,
+    list_result,
+    register_tool,
+    ro,
+)
 
 _COMPLIANCE_DESC = (
     "Golden Config compliance for a device (or a location): which config features are compliant vs "
@@ -26,7 +38,11 @@ _CC = "plugins/golden-config/config-compliance/"
 _GC = "plugins/golden-config/golden-config/"
 
 
-async def _config_compliance(app: AppContext, device: str | None = None, location: str | None = None) -> ToolResult:
+async def _config_compliance(
+    app: AppContext,
+    device: Annotated[str | None, Field(description="Device NAME for a single-device compliance summary. Omit to scope by location/org.")] = None,
+    location: OptLocation = None,
+) -> ToolResult:
     gw = app.gateway
     c = Collector()
     t = Trimmer(app.settings.max_items)
@@ -58,8 +74,10 @@ async def _config_compliance(app: AppContext, device: str | None = None, locatio
                           scope=scope, count=len(rows), truncated=len(rows) > app.settings.max_items, collector=c)
 
 
-async def _device_config(app: AppContext, device: str,
-                         kind: Literal["backup", "intended", "compliance"] = "intended") -> ToolResult:
+async def _device_config(
+    app: AppContext, device: Device,
+    kind: Annotated[Literal["backup", "intended", "compliance"], Field(description="Which stored config to return: 'backup' (as-built), 'intended' (from templates), or 'compliance' (diff).")] = "intended",
+) -> ToolResult:
     gw = app.gateway
     d = await app.resolver.one("device", device)
     rows = await gw.list(_GC, {"device": d["id"]}, cap=1)
@@ -76,8 +94,47 @@ async def _device_config(app: AppContext, device: str,
                           data, scope=f"device:{d.get('name')}", truncated=truncated)
 
 
+_SEARCH_DESC = (
+    "Search device config TEXT for a string across the fleet (Golden Config): find which devices "
+    "have a line matching `pattern` in their backup/intended/compliance config. Use for 'which "
+    "devices run snmp community public?' or 'who still has telnet enabled?'. Optionally scope by "
+    "location. Returns matching devices with the first matching line. Requires the Golden Config app."
+)
+_KIND_FIELD = {"backup": "backup_config", "intended": "intended_config", "compliance": "compliance_config"}
+
+
+async def _config_search(
+    app: AppContext,
+    pattern: Annotated[str, Field(description="Case-insensitive text to find in the config, e.g. 'snmp-server community' or 'transport input telnet'.")],
+    kind: Annotated[Literal["backup", "intended", "compliance"], Field(description="Which stored config to search.")] = "backup",
+    location: OptLocation = None,
+    scan_limit: Annotated[int, Field(description="Max device configs to scan (bounds cost on large fleets).", ge=1, le=500)] = 200,
+) -> ToolResult:
+    gw = app.gateway
+    field = _KIND_FIELD[kind]
+    params: dict = {"depth": 1}
+    if location:
+        params["device__location"] = location
+    rows = await gw.list(_GC, params, cap=scan_limit)
+    needle = pattern.lower()
+    t = Trimmer(app.settings.max_items)
+    matches = []
+    for r in rows:
+        cfg = r.get(field) or ""
+        for line in cfg.splitlines():
+            if needle in line.lower():
+                matches.append({"device": disp(r.get("device")), "line": line.strip()[:200]})
+                break
+    scope = f"location:{location}" if location else "org"
+    summary = f"'{pattern}' found in {kind} config of {len(matches)}/{len(rows)} scanned device(s) [{scope}]."
+    return list_result(summary, t.rows(matches), kind="config_match", scope=scope,
+                       truncated=t.truncated, extra={"pattern": pattern, "config_kind": kind, "scanned": len(rows)})
+
+
 def register(mcp: FastMCP) -> None:
     register_tool(mcp, _config_compliance, name="nautobot_config_compliance",
                   description=_COMPLIANCE_DESC, annotations=ro("Config compliance"))
     register_tool(mcp, _device_config, name="nautobot_device_config",
                   description=_CONFIG_DESC, annotations=ro("Device stored config"))
+    register_tool(mcp, _config_search, name="nautobot_config_search",
+                  description=_SEARCH_DESC, annotations=ro("Search device configs"))

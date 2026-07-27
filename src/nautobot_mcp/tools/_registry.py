@@ -16,26 +16,40 @@ from inspect import Parameter, Signature
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 from ..context import get_app
-from ..core.errors import GatewayError, ResolutionError
+from ..core.errors import GatewayError, NautobotValidationError, ResolutionError
 from ..core.observability import get_logger
+from ..core.progress import Progress
 from ..core.response import ErrorKind, Response, ToolResult, enforce_budget
+
+# handler params the registrar injects rather than exposing in the tool schema
+_INJECTED = ("progress",)
+
+# Genuine execution failures — flag these with the protocol's isError so any client
+# (not just LLMs reading our structured error) knows the call failed. Ambiguous/
+# not-found are NOT failures: the tool ran and is guiding the caller to refine input.
+_HARD_ERRORS = frozenset({ErrorKind.TIMEOUT, ErrorKind.API_ERROR, ErrorKind.UNEXPECTED})
 
 _logger = get_logger("nautobot_mcp.tools")
 Handler = Callable[..., Awaitable[ToolResult]]
+# the adapted MCP tool may also return CallToolResult (hard errors carry the isError flag)
+Wrapped = Callable[..., Awaitable["ToolResult | CallToolResult"]]
 
 
 def register_tool(mcp: FastMCP, handler: Handler, *, name: str, description: str, annotations: ToolAnnotations) -> None:
     mcp.add_tool(_adapt(handler, name), name=name, description=description, annotations=annotations)
 
 
-def _adapt(handler: Handler, name: str) -> Handler:
+def _adapt(handler: Handler, name: str) -> Wrapped:
     tool_params = _tool_params(handler, name)
+    wants_progress = "progress" in inspect.signature(handler).parameters
 
-    async def wrapper(ctx: Context, **kwargs: Any) -> ToolResult:
+    async def wrapper(ctx: Context, **kwargs: Any) -> ToolResult | CallToolResult:
         app = get_app(ctx)
+        if wants_progress:
+            kwargs["progress"] = Progress(ctx)
         started = time.monotonic()
         try:
             result = await asyncio.wait_for(handler(app, **kwargs), timeout=app.settings.tool_timeout_seconds)
@@ -45,6 +59,10 @@ def _adapt(handler: Handler, name: str) -> Handler:
         except asyncio.TimeoutError:
             msg = f"{name} timed out after {app.settings.tool_timeout_seconds:.0f}s."
             return _fail(name, started, ErrorKind.TIMEOUT, msg)
+        except NautobotValidationError as exc:
+            choices = [{"field": k, "error": v} for k, v in exc.fields.items()] or None
+            return _fail(name, started, exc.kind, exc.message, operation=exc.operation, choices=choices,
+                         summary=f"Invalid request — {exc.message}. Fix the field(s) and retry.")
         except GatewayError as exc:
             return _fail(name, started, exc.kind, exc.message, operation=exc.operation,
                          summary=f"Nautobot API error — {exc.message}")
@@ -75,15 +93,26 @@ def _tool_params(handler: Handler, name: str) -> list[Parameter]:
     params = list(inspect.signature(handler).parameters.values())
     if not params or params[0].name != "app":
         raise TypeError(f"{name}: handler must take (app: AppContext, ...) first")
-    hints = typing.get_type_hints(handler)
-    return [p.replace(annotation=hints.get(p.name, p.annotation)) for p in params[1:]]
+    # include_extras=True keeps Annotated[..., Field(description=...)] metadata so per-parameter
+    # descriptions reach the generated input schema (without it, __future__ string hints are stripped).
+    hints = typing.get_type_hints(handler, include_extras=True)
+    return [p.replace(annotation=hints.get(p.name, p.annotation))
+            for p in params[1:] if p.name not in _INJECTED]
 
 
 def _fail(name: str, started: float, kind: ErrorKind, message: str, *, operation: str | None = None,
-          choices: list[dict[str, Any]] | None = None, summary: str | None = None, level: str = "warning") -> ToolResult:
+          choices: list[dict[str, Any]] | None = None, summary: str | None = None,
+          level: str = "warning") -> ToolResult | CallToolResult:
     result = Response.error(kind, message, operation=operation, choices=choices, summary=summary)
     result.meta.elapsed_ms = _elapsed(started)
     _log(name, result.meta.elapsed_ms, f"error:{kind.value}", level, operation=operation)
+    if kind in _HARD_ERRORS:
+        # keep the structured error (validated against outputSchema) AND raise the isError flag
+        return CallToolResult(
+            content=[TextContent(type="text", text=result.summary)],
+            structuredContent=result.model_dump(mode="json"),
+            isError=True,
+        )
     return result
 
 

@@ -10,9 +10,14 @@ These are the source-of-truth equivalents of the Meraki workflow tools:
 from __future__ import annotations
 
 import asyncio
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
+from ..core.progress import NULL_PROGRESS, Progress
+from ..core.response import ErrorKind
+from ._params import Device, Location, OptLocation
 from ._shared import AppContext, Collector, Response, ToolResult, count_by, disp, register_tool, ro
 
 _AUDIT_DESC = (
@@ -53,15 +58,18 @@ _CHECKS = [
 ]
 
 
-async def _data_quality_audit(app: AppContext, location: str | None = None) -> ToolResult:
+async def _data_quality_audit(app: AppContext, location: OptLocation = None,
+                              progress: Progress = NULL_PROGRESS) -> ToolResult:
     gw = app.gateway
     c = Collector()
+    progress.start(len(_CHECKS))
 
     async def run(name, path, flt, loc_ok):
         params = dict(flt)
         if location and loc_ok:
             params["location"] = location
         n = await c.get(name, gw.count(path, params))
+        await progress.step(f"checked {name}")
         return name, n
 
     pairs = await asyncio.gather(*(run(*chk) for chk in _CHECKS))
@@ -75,11 +83,13 @@ async def _data_quality_audit(app: AppContext, location: str | None = None) -> T
 
 
 # --- site report -----------------------------------------------------------
-async def _site_report(app: AppContext, location: str) -> ToolResult:
+async def _site_report(app: AppContext, location: Location,
+                       progress: Progress = NULL_PROGRESS) -> ToolResult:
     gw = app.gateway
     loc = await app.resolver.one("location", location, depth=1)
     c = Collector()
     name = loc.get("name")
+    await progress.info(f"Gathering {name}: devices, prefixes, VLANs, racks…")
 
     devices, prefixes, vlans, racks, missing_ip = await asyncio.gather(
         c.get("devices", gw.list("dcim/devices/", {"location": name, "depth": 1}, cap=app.settings.max_items)),
@@ -107,7 +117,7 @@ async def _site_report(app: AppContext, location: str) -> ToolResult:
 
 
 # --- device readiness ------------------------------------------------------
-async def _device_readiness(app: AppContext, device: str) -> ToolResult:
+async def _device_readiness(app: AppContext, device: Device) -> ToolResult:
     gw = app.gateway
     d = await app.resolver.one("device", device, depth=1)
     c = Collector()
@@ -141,7 +151,10 @@ async def _device_readiness(app: AppContext, device: str) -> ToolResult:
 
 
 # --- rack elevation --------------------------------------------------------
-async def _rack(app: AppContext, rack: str) -> ToolResult:
+async def _rack(
+    app: AppContext,
+    rack: Annotated[str, Field(description="Rack NAME, e.g. 'AMS01-R01'.")],
+) -> ToolResult:
     gw = app.gateway
     rows = await app.resolver.lookup("dcim/racks/", rack, depth=1, cap=10)
     if not rows:
@@ -160,7 +173,11 @@ async def _rack(app: AppContext, rack: str) -> ToolResult:
 
 
 # --- IP allocation suggestion ----------------------------------------------
-async def _ip_allocate(app: AppContext, prefix: str, count: int = 1) -> ToolResult:
+async def _ip_allocate(
+    app: AppContext,
+    prefix: Annotated[str, Field(description="Parent prefix in CIDR to allocate from, e.g. '10.0.0.0/24'.")],
+    count: Annotated[int, Field(description="How many free IP addresses to suggest.", ge=1, le=50)] = 1,
+) -> ToolResult:
     gw = app.gateway
     c = Collector()
     rows = await gw.list("ipam/prefixes/", {"prefix": prefix, "depth": 1}, cap=5)
@@ -181,9 +198,44 @@ async def _ip_allocate(app: AppContext, prefix: str, count: int = 1) -> ToolResu
     return Response.build(summary, data, scope="ipam", collector=c)
 
 
+# --- VLAN allocation suggestion --------------------------------------------
+_VLAN_ALLOCATE_DESC = (
+    "Suggest the next free VLAN ID(s) in a VLAN group or location (read-only — proposes, does not "
+    "reserve). Pass a vlan_group NAME or a location NAME (one is required, since VIDs are unique "
+    "within a group/site). Use for 'what's the next free VLAN in <group/site>?'."
+)
+
+
+async def _vlan_allocate(
+    app: AppContext,
+    vlan_group: Annotated[str | None, Field(description="VLAN group NAME to allocate within, e.g. 'AMS01-core'.")] = None,
+    location: OptLocation = None,
+    count: Annotated[int, Field(description="How many free VLAN IDs to suggest.", ge=1, le=50)] = 1,
+    vid_min: Annotated[int, Field(description="Lowest VLAN ID to consider.", ge=1, le=4094)] = 1,
+    vid_max: Annotated[int, Field(description="Highest VLAN ID to consider.", ge=1, le=4094)] = 4094,
+) -> ToolResult:
+    if not vlan_group and not location:
+        return Response.error(
+            ErrorKind.INVALID_INPUT, "vlan_group or location is required.",
+            summary="Pass a vlan_group or location — VLAN IDs are only unique within a group/site.",
+        )
+    gw = app.gateway
+    scope_filter = {"vlan_group": vlan_group} if vlan_group else {"location": location}
+    rows = await gw.list("ipam/vlans/", {**scope_filter, "depth": 0}, cap=5000)
+    used = {r.get("vid") for r in rows if isinstance(r.get("vid"), int)}
+    free = [vid for vid in range(vid_min, vid_max + 1) if vid not in used][:count]
+    scope = f"group:{vlan_group}" if vlan_group else f"location:{location}"
+    data = {"scope": scope, "used_count": len(used), "suggested_vids": free,
+            "note": "Read-only suggestion — create the VLAN in Nautobot to make it authoritative."}
+    summary = (f"{scope}: {len(used)} VLAN(s) used; next {len(free)} free VID(s): "
+               f"{', '.join(map(str, free)) or 'none in range'}.")
+    return Response.build(summary, data, scope=scope)
+
+
 def register(mcp: FastMCP) -> None:
     register_tool(mcp, _data_quality_audit, name="nautobot_data_quality_audit", description=_AUDIT_DESC, annotations=ro("SoT data-quality audit"))
     register_tool(mcp, _site_report, name="nautobot_site_report", description=_SITE_DESC, annotations=ro("Site report"))
     register_tool(mcp, _device_readiness, name="nautobot_device_readiness", description=_READINESS_DESC, annotations=ro("Device readiness"))
     register_tool(mcp, _rack, name="nautobot_rack", description=_RACK_DESC, annotations=ro("Rack elevation"))
     register_tool(mcp, _ip_allocate, name="nautobot_ip_allocate", description=_ALLOCATE_DESC, annotations=ro("Suggest free IP space"))
+    register_tool(mcp, _vlan_allocate, name="nautobot_vlan_allocate", description=_VLAN_ALLOCATE_DESC, annotations=ro("Suggest free VLAN IDs"))

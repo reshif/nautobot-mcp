@@ -22,6 +22,7 @@ _logger = get_logger(__name__)
 class ErrorKind(str, Enum):
     AMBIGUOUS_TARGET = "ambiguous_target"
     TARGET_NOT_FOUND = "target_not_found"
+    INVALID_INPUT = "invalid_input"  # bad filter/value — self-correctable, not a failure
     TIMEOUT = "timeout"
     API_ERROR = "api_error"
     UNEXPECTED = "unexpected_error"

@@ -7,7 +7,10 @@ curated, stored query by name — safer/repeatable for common reports.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from ..core.errors import AmbiguousTarget, TargetNotFound
 from ._shared import AppContext, Response, ToolResult, register_tool, ro
@@ -32,7 +35,11 @@ _SCHEMA_DESC = (
 )
 
 
-async def _graphql(app: AppContext, query: str, variables: dict | None = None) -> ToolResult:
+async def _graphql(
+    app: AppContext,
+    query: Annotated[str, Field(description="A read-only GraphQL query string, e.g. '{ devices(location:\"AMS01\"){ name interfaces{ name } } }'. Use nautobot_graphql_schema first if unsure of field names.")],
+    variables: Annotated[dict | None, Field(description="Optional GraphQL variables as a dict.")] = None,
+) -> ToolResult:
     body = {"query": query, "variables": variables or {}}
     result = await app.gateway.post("graphql/", body)
     errors = result.get("errors") if isinstance(result, dict) else None
@@ -45,7 +52,11 @@ async def _graphql(app: AppContext, query: str, variables: dict | None = None) -
                           {"data": data}, scope="graphql")
 
 
-async def _saved_query(app: AppContext, name: str, variables: dict | None = None) -> ToolResult:
+async def _saved_query(
+    app: AppContext,
+    name: Annotated[str, Field(description="Name of a stored GraphQL query (discover them via nautobot_query(object_type='graphql-queries')).")],
+    variables: Annotated[dict | None, Field(description="Optional GraphQL variables as a dict.")] = None,
+) -> ToolResult:
     gw = app.gateway
     rows = await app.resolver.lookup("extras/graphql-queries/", name, cap=10)
     if not rows:
@@ -59,7 +70,10 @@ async def _saved_query(app: AppContext, name: str, variables: dict | None = None
     return Response.build(f"Ran saved query '{rows[0].get('name')}'.", {"data": data}, scope="graphql")
 
 
-async def _graphql_schema(app: AppContext, type_name: str | None = None) -> ToolResult:
+async def _graphql_schema(
+    app: AppContext,
+    type_name: Annotated[str | None, Field(description="A GraphQL type name (e.g. 'DeviceType') to list its fields; omit to list the root query fields.")] = None,
+) -> ToolResult:
     gw = app.gateway
     if type_name:
         q = ('{ __type(name: "' + type_name.replace('"', "") +

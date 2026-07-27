@@ -1,9 +1,26 @@
 """Device tools: `nautobot_device`, `nautobot_device_interfaces`, `nautobot_list_devices`."""
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from typing import Annotated
 
-from ._shared import AppContext, Collector, Response, ToolResult, Trimmer, disp, filters, ref, register_tool, ro
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+from ..core.response import ErrorKind
+from ._params import Device, OptLocation, OptOffset, OptRole, OptStatus
+from ._shared import (
+    AppContext,
+    Collector,
+    Response,
+    ToolResult,
+    Trimmer,
+    disp,
+    filters,
+    list_result,
+    ref,
+    register_tool,
+    ro,
+)
 
 _DEVICE_DESC = (
     "Full source-of-truth record for ONE device: role, type/model, platform, status, location, "
@@ -23,7 +40,7 @@ _LIST_DESC = (
 )
 
 
-async def _device(app: AppContext, device: str) -> ToolResult:
+async def _device(app: AppContext, device: Device) -> ToolResult:
     gw = app.gateway
     d = await app.resolver.one("device", device, depth=1)
     c = Collector()
@@ -43,7 +60,10 @@ async def _device(app: AppContext, device: str) -> ToolResult:
     return Response.build(summary, data, scope=f"device:{d.get('name')}", collector=c)
 
 
-async def _device_interfaces(app: AppContext, device: str, connected_only: bool = False) -> ToolResult:
+async def _device_interfaces(
+    app: AppContext, device: Device,
+    connected_only: Annotated[bool, Field(description="If true, return only cabled/connected interfaces.")] = False,
+) -> ToolResult:
     gw = app.gateway
     d = await app.resolver.one("device", device)
     t = Trimmer(app.settings.max_items)
@@ -51,23 +71,27 @@ async def _device_interfaces(app: AppContext, device: str, connected_only: bool 
     if connected_only:
         rows = [r for r in rows if r.get("cable") or r.get("connected_endpoint")]
     items = [{
-        "name": r.get("name"), "type": r.get("type"), "enabled": r.get("enabled"), "mode": r.get("mode"),
-        "mtu": r.get("mtu"), "mac_address": r.get("mac_address"), "ip_address_count": r.get("ip_address_count"),
-        "status": disp(r.get("status")), "untagged_vlan": disp(r.get("untagged_vlan")), "lag": disp(r.get("lag")),
+        "id": r.get("id"), "name": r.get("name"), "type": disp(r.get("type")), "enabled": r.get("enabled"),
+        "mode": disp(r.get("mode")), "mtu": r.get("mtu"), "mac_address": r.get("mac_address"),
+        "ip_address_count": r.get("ip_address_count"), "status": disp(r.get("status")),
+        "untagged_vlan": disp(r.get("untagged_vlan")), "lag": disp(r.get("lag")),
         "cabled": bool(r.get("cable")), "connected_to": disp(r.get("connected_endpoint")),
         "reachable": r.get("connected_endpoint_reachable"), "description": r.get("description"),
     } for r in t.rows(rows)]
     summary = f"{d.get('name')}: {len(items)} interface(s)" + (" (connected only)" if connected_only else "") + "."
-    return Response.build(summary, {"device": d.get("name"), "interfaces": items},
-                          scope=f"device:{d.get('name')}", count=len(items), truncated=t.truncated)
+    return list_result(summary, items, kind="interface", scope=f"device:{d.get('name')}",
+                       truncated=t.truncated, extra={"device": d.get("name")})
 
 
-async def _list_devices(app: AppContext, location: str | None = None, role: str | None = None,
-                        status: str | None = None, manufacturer: str | None = None,
-                        model: str | None = None) -> ToolResult:
+async def _list_devices(
+    app: AppContext, location: OptLocation = None, role: OptRole = None, status: OptStatus = None,
+    manufacturer: Annotated[str | None, Field(description="Filter by manufacturer NAME, e.g. 'Cisco', 'Arista'.")] = None,
+    model: Annotated[str | None, Field(description="Filter by device-type/model NAME, e.g. 'DCS-7280'.")] = None,
+    offset: OptOffset = 0,
+) -> ToolResult:
     gw = app.gateway
     t = Trimmer(app.settings.max_items)
-    params = {"depth": 1, **filters(
+    params = {"depth": 1, "offset": offset, **filters(
         ("location", location), ("role", role), ("status", status),
         ("manufacturer", manufacturer), ("device_type", model))}
     rows = await gw.list("dcim/devices/", params, cap=app.settings.max_items + 1)
@@ -78,8 +102,8 @@ async def _list_devices(app: AppContext, location: str | None = None, role: str 
     } for r in t.rows(rows)]
     scope = ", ".join(f"{k}={v}" for k, v in (("location", location), ("role", role), ("status", status),
                       ("manufacturer", manufacturer), ("model", model)) if v) or "all"
-    return Response.build(f"{len(items)} device(s) [{scope}].", {"filters": scope, "devices": items},
-                          scope="devices", count=len(items), truncated=t.truncated)
+    return list_result(f"{len(items)} device(s) [{scope}].", items, kind="device", scope="devices",
+                       offset=offset, truncated=t.truncated, extra={"filters": scope})
 
 
 _CONFIG_CONTEXT_DESC = (
@@ -89,7 +113,7 @@ _CONFIG_CONTEXT_DESC = (
 )
 
 
-async def _device_config_context(app: AppContext, device: str) -> ToolResult:
+async def _device_config_context(app: AppContext, device: Device) -> ToolResult:
     gw = app.gateway
     d = await app.resolver.one("device", device)
     full = await gw.get(f"dcim/devices/{d['id']}/", {"include": "config_context"})
@@ -99,10 +123,47 @@ async def _device_config_context(app: AppContext, device: str) -> ToolResult:
                           {"device": d.get("name"), "config_context": ctx}, scope=f"device:{d.get('name')}")
 
 
+_INTERFACE_DESC = (
+    "Full detail for ONE interface on a device: type, enabled, mode, MTU, MAC, speed, description, "
+    "LAG, untagged/tagged VLANs, assigned IP addresses, and the connected peer. Pass the device NAME "
+    "and the interface name (e.g. 'GigabitEthernet0/1'). Use for 'show me interface X on <device>'; "
+    "for the whole list use nautobot_device_interfaces."
+)
+
+
+async def _interface(
+    app: AppContext, device: Device,
+    name: Annotated[str, Field(description="Interface name exactly as in Nautobot, e.g. 'GigabitEthernet0/1', 'Ethernet1/1'.")],
+) -> ToolResult:
+    gw = app.gateway
+    d = await app.resolver.one("device", device)
+    rows = await gw.list("dcim/interfaces/", {"device_id": d["id"], "name": name, "depth": 1}, cap=2)
+    if not rows:
+        return Response.error(  # self-correcting: suggest listing them
+            ErrorKind.TARGET_NOT_FOUND, f"No interface '{name}' on {d.get('name')}.",
+            summary=f"No interface '{name}' on {d.get('name')}. Use nautobot_device_interfaces to list them.",
+        )
+    r = rows[0]
+    ips = await gw.list("ipam/ip-addresses/", {"interfaces": r["id"], "depth": 0}, cap=25)
+    data = {
+        "device": d.get("name"), "name": r.get("name"), "type": disp(r.get("type")), "enabled": r.get("enabled"),
+        "mode": disp(r.get("mode")), "mtu": r.get("mtu"), "mac_address": r.get("mac_address"),
+        "description": r.get("description"), "lag": disp(r.get("lag")), "untagged_vlan": disp(r.get("untagged_vlan")),
+        "status": disp(r.get("status")), "cabled": bool(r.get("cable")),
+        "connected_to": disp(r.get("connected_endpoint")), "reachable": r.get("connected_endpoint_reachable"),
+        "ip_addresses": [ip.get("address") for ip in ips],
+    }
+    summary = (f"{d.get('name')} {r.get('name')}: {data['type']}, "
+               f"{'enabled' if r.get('enabled') else 'disabled'}, {len(data['ip_addresses'])} IP(s)"
+               f"{', connected to ' + data['connected_to'] if data['connected_to'] else ''}.")
+    return Response.build(summary, data, scope=f"device:{d.get('name')}")
+
+
 def register(mcp: FastMCP) -> None:
     register_tool(mcp, _device, name="nautobot_device", description=_DEVICE_DESC, annotations=ro("Device detail"))
     register_tool(mcp, _device_interfaces, name="nautobot_device_interfaces",
                   description=_INTERFACES_DESC, annotations=ro("Device interfaces"))
+    register_tool(mcp, _interface, name="nautobot_interface", description=_INTERFACE_DESC, annotations=ro("Interface detail"))
     register_tool(mcp, _device_config_context, name="nautobot_device_config_context",
                   description=_CONFIG_CONTEXT_DESC, annotations=ro("Device config context"))
     register_tool(mcp, _list_devices, name="nautobot_list_devices", description=_LIST_DESC, annotations=ro("List devices"))

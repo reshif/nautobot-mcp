@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from nautobot_mcp.core.errors import AmbiguousTarget, TargetNotFound
 from nautobot_mcp.core.resolver import Resolver
-from nautobot_mcp.tools.devices import _device, _list_devices
+from nautobot_mcp.tools.devices import _device, _interface, _list_devices
 from nautobot_mcp.tools.find import _find
 from nautobot_mcp.tools.ipam import _ip_lookup
 from nautobot_mcp.tools.overview import _status_overview
@@ -79,4 +79,22 @@ async def test_list_devices_filters_projected():
         {"id": "d1", "name": "ams01", "role": {"display": "backbone"}, "status": {"display": "Active"},
          "location": {"display": "AMS"}, "device_type": {"display": "X"}}]})
     r = await _list_devices(app(gw), location="AMS", status="Active")
-    assert r.data["devices"][0]["name"] == "ams01" and "location=AMS" in r.data["filters"]
+    assert r.data["items"][0]["name"] == "ams01" and r.data["kind"] == "device" and "location=AMS" in r.data["filters"]
+
+
+async def test_interface_detail_with_ips():
+    gw = FakeGateway(list_map={
+        "dcim/devices/": [{"id": "d1", "name": "ams01"}],
+        "dcim/interfaces/": [{"id": "i1", "name": "Ethernet1/1", "type": "10gbase-x-sfpp",
+                              "enabled": True, "connected_endpoint": {"display": "core:Eth1"}}],
+        "ipam/ip-addresses/": [{"address": "10.0.0.1/31"}],
+    })
+    r = await _interface(app(gw), "ams01", "Ethernet1/1")
+    assert r.data["name"] == "Ethernet1/1" and r.data["ip_addresses"] == ["10.0.0.1/31"]
+    assert "connected to core:Eth1" in r.summary
+
+
+async def test_interface_not_found_self_corrects():
+    gw = FakeGateway(list_map={"dcim/devices/": [{"id": "d1", "name": "ams01"}], "dcim/interfaces/": []})
+    r = await _interface(app(gw), "ams01", "Nope0/0")
+    assert r.error is not None and "nautobot_device_interfaces" in r.summary

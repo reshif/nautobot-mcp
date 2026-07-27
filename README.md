@@ -23,19 +23,33 @@ each as a tool would wreck LLM selection, so coverage is layered:
   `nautobot_device_readiness` (deployment/documentation checklist, GO/NO-GO), `nautobot_rack`
   (elevation + free U), `nautobot_ip_allocate` (next free IP/subnet suggestion).
 - **Sharp purpose tools** (the common intents): `nautobot_find`, `nautobot_device`,
-  `nautobot_device_interfaces`, `nautobot_device_config_context`, `nautobot_cabling`,
-  `nautobot_list_devices`, `nautobot_location`, `nautobot_ip_lookup`,
-  `nautobot_prefix` (+ available IPs/prefixes), `nautobot_list_prefixes`, `nautobot_vlans`,
-  `nautobot_status_overview`, `nautobot_object_changes` (SoT audit log).
+  `nautobot_device_interfaces`, `nautobot_interface` (single-interface detail), `nautobot_device_config_context`,
+  `nautobot_cabling`, `nautobot_list_devices`, `nautobot_location`, `nautobot_ip_lookup`,
+  `nautobot_prefix` (+ available IPs/prefixes), `nautobot_list_prefixes`, `nautobot_list_vlans`,
+  `nautobot_vlan_allocate` (next free VID), `nautobot_status_overview`, `nautobot_object_changes` (SoT audit log).
 - **Optional (flagged, network-automation apps):** `nautobot_jobs`, `nautobot_circuits`,
   `nautobot_lifecycle_report` (EoX/end-of-support, Device Lifecycle app), and the Golden Config
-  layer — `nautobot_config_compliance` (per-device or per-site: which config features are
-  compliant vs failing, with missing/extra + remediation) and `nautobot_device_config` (the stored
-  backup / intended / compliance config text). Enable with `NAUTOBOT_MCP_ENABLE_OPTIONAL_TOOLS=true`.
+  layer — `nautobot_config_compliance` (per-device or per-site compliance), `nautobot_device_config`
+  (stored backup/intended/compliance text), and `nautobot_config_search` (grep config text across the
+  fleet — "who still runs telnet?"). Enable with `NAUTOBOT_MCP_ENABLE_OPTIONAL_TOOLS=true`.
+
+**Tool-structure ergonomics (for the LLM):** every list tool returns a **uniform envelope**
+(`{kind, count, items}`) with **cursor pagination** (`next_offset` → pass back as `offset`); an
+**unknown filter is a self-correcting error** that returns the valid filter names for that type
+(not a hard failure); `nautobot_query` **defers to the sharp tools** when one exists.
 
 **Resources:** `nautobot://locations`, `nautobot://device-roles`, `nautobot://statuses`,
-`nautobot://manufacturers`. **Prompts:** `/find`, `/device_report`, `/ip_lookup`, `/site_inventory`.
-Every tool + power endpoint was **validated live against demo.nautobot.com**.
+`nautobot://manufacturers` (titled). **Prompts:** `/find`, `/device_report`, `/ip_lookup`,
+`/site_inventory`, with **argument completion** — `location`/`device` args autocomplete from live
+Nautobot data. Every tool + power endpoint was **validated live against demo.nautobot.com**.
+
+**LLM-facing conformance (MCP SDK):** every tool parameter carries a `Field(description=…)` and
+closed sets are `Literal` enums, so the generated `inputSchema` guides the model on every argument;
+tools return a Pydantic `ToolResult`, so each also advertises an `outputSchema` + `structuredContent`;
+read-only tools are annotated `readOnlyHint`/`idempotentHint`/`openWorldHint`; genuine failures set
+the protocol `isError` (self-correcting ambiguity/not-found do not); fan-out tools report progress.
+Covered by in-memory client-session tests (`tests/test_server_session.py`). Scored **≈94/100**
+against `MCP_ENGINEERING_STANDARD.md`.
 
 ## Shape (mirrors meraki-mcp)
 - **One contract** — every tool returns `ToolResult{summary, data, meta, error}`; payloads projected to declared fields (nested objects compacted via `ref`), arrays capped.
@@ -63,4 +77,3 @@ uv run python -m nautobot_mcp # stdio (waits for an MCP client — normal)
 3. **HTTP / Copilot Studio:** `NAUTOBOT_MCP_TRANSPORT=streamable-http nautobot-mcp` → `http://127.0.0.1:8000/mcp` (or `docker build -t nautobot-mcp . && docker run -p 8000:8000 -e NAUTOBOT_URL=... -e NAUTOBOT_TOKEN=... nautobot-mcp`). No auth yet (OAuth planned) — keep behind a tunnel/gateway.
 
 > **Never commit a real token.** `.env` is git-ignored; `.env.example` holds a placeholder.
-# nautobot-mcp

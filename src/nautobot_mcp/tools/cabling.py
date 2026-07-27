@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from ._shared import AppContext, Response, ToolResult, Trimmer, disp, register_tool, ro
+from ._params import Device
+from ._shared import AppContext, ToolResult, Trimmer, disp, list_result, register_tool, ro
 
 _DESC = (
     "Show the physical connections of a device: for each cabled interface, the local port, the "
@@ -12,7 +13,7 @@ _DESC = (
 )
 
 
-async def _cabling(app: AppContext, device: str) -> ToolResult:
+async def _cabling(app: AppContext, device: Device) -> ToolResult:
     gw = app.gateway
     d = await app.resolver.one("device", device)
     t = Trimmer(app.settings.max_items)
@@ -25,9 +26,9 @@ async def _cabling(app: AppContext, device: str) -> ToolResult:
         "connected_endpoint": disp(r.get("connected_endpoint")),
         "reachable": r.get("connected_endpoint_reachable"),
     } for r in t.rows(connected)]
-    return Response.build(f"{d.get('name')}: {len(links)} cabled/connected interface(s).",
-                          {"device": d.get("name"), "links": links},
-                          scope=f"device:{d.get('name')}", count=len(links), truncated=t.truncated)
+    return list_result(f"{d.get('name')}: {len(links)} cabled/connected interface(s).", links,
+                       kind="cable_link", scope=f"device:{d.get('name')}", truncated=t.truncated,
+                       extra={"device": d.get("name")})
 
 
 def register(mcp: FastMCP) -> None:

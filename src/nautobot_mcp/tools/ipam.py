@@ -1,9 +1,25 @@
-"""IPAM tools: `nautobot_ip_lookup`, `nautobot_prefix`, `nautobot_list_prefixes`, `nautobot_vlans`."""
+"""IPAM tools: `nautobot_ip_lookup`, `nautobot_prefix`, `nautobot_list_prefixes`, `nautobot_list_vlans`."""
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from typing import Annotated
 
-from ._shared import AppContext, Collector, Response, ToolResult, Trimmer, disp, filters, ref, register_tool, ro
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+from ._params import OptLocation, OptOffset, OptRole, OptStatus, OptTenant
+from ._shared import (
+    AppContext,
+    Collector,
+    Response,
+    ToolResult,
+    Trimmer,
+    disp,
+    filters,
+    list_result,
+    ref,
+    register_tool,
+    ro,
+)
 
 _IP_DESC = (
     "Look up an IP address in the source of truth: its status, DNS name, type/role, parent prefix, "
@@ -24,7 +40,10 @@ _VLANS_DESC = (
 )
 
 
-async def _ip_lookup(app: AppContext, address: str) -> ToolResult:
+async def _ip_lookup(
+    app: AppContext,
+    address: Annotated[str, Field(description="IP address, with or without mask, e.g. '10.0.0.1' or '10.0.0.1/24'.")],
+) -> ToolResult:
     gw = app.gateway
     c = Collector()
     flt = {"address": address} if "/" in address else {"host": address}
@@ -48,7 +67,11 @@ async def _ip_lookup(app: AppContext, address: str) -> ToolResult:
     return Response.build(f"{ip.get('address')}: {disp(ip.get('status'))}, {where}.", data, scope="ipam", collector=c)
 
 
-async def _prefix(app: AppContext, prefix: str, include_available: bool = True) -> ToolResult:
+async def _prefix(
+    app: AppContext,
+    prefix: Annotated[str, Field(description="Prefix in CIDR notation, e.g. '10.0.0.0/24'.")],
+    include_available: Annotated[bool, Field(description="If true, also return the first free IPs and available child blocks.")] = True,
+) -> ToolResult:
     gw = app.gateway
     c = Collector()
     rows = await gw.list("ipam/prefixes/", {"prefix": prefix, "depth": 1}, cap=5)
@@ -77,38 +100,47 @@ async def _prefix(app: AppContext, prefix: str, include_available: bool = True) 
     return Response.build(summary, data, scope="ipam", collector=c)
 
 
-async def _list_prefixes(app: AppContext, location: str | None = None, role: str | None = None,
-                         status: str | None = None, tenant: str | None = None,
-                         namespace: str | None = None, within: str | None = None) -> ToolResult:
+async def _list_prefixes(
+    app: AppContext, location: OptLocation = None, role: OptRole = None, status: OptStatus = None,
+    tenant: OptTenant = None,
+    namespace: Annotated[str | None, Field(description="Filter by IPAM namespace NAME (e.g. 'Global').")] = None,
+    within: Annotated[str | None, Field(description="Only prefixes contained within this CIDR, e.g. '10.0.0.0/16'.")] = None,
+    offset: OptOffset = 0,
+) -> ToolResult:
     gw = app.gateway
     t = Trimmer(app.settings.max_items)
-    params = {"depth": 1, **filters(
+    params = {"depth": 1, "offset": offset, **filters(
         ("location", location), ("role", role), ("status", status),
         ("tenant", tenant), ("namespace", namespace), ("within_include", within))}
     rows = await gw.list("ipam/prefixes/", params, cap=app.settings.max_items + 1)
-    items = [{"prefix": r.get("prefix"), "status": disp(r.get("status")), "role": disp(r.get("role")),
+    items = [{"id": r.get("id"), "prefix": r.get("prefix"), "status": disp(r.get("status")), "role": disp(r.get("role")),
               "namespace": disp(r.get("namespace")), "vlan": disp(r.get("vlan")), "tenant": disp(r.get("tenant"))}
              for r in t.rows(rows)]
-    return Response.build(f"{len(items)} prefix(es).", {"prefixes": items}, scope="ipam",
-                          count=len(items), truncated=t.truncated)
+    return list_result(f"{len(items)} prefix(es).", items, kind="prefix", scope="ipam",
+                       offset=offset, truncated=t.truncated)
 
 
-async def _vlans(app: AppContext, location: str | None = None, vlan_group: str | None = None,
-                 vid: int | None = None, status: str | None = None) -> ToolResult:
+async def _vlans(
+    app: AppContext, location: OptLocation = None,
+    vlan_group: Annotated[str | None, Field(description="Filter by VLAN group NAME.")] = None,
+    vid: Annotated[int | None, Field(description="Filter by VLAN ID number, e.g. 100.")] = None,
+    status: OptStatus = None,
+    offset: OptOffset = 0,
+) -> ToolResult:
     gw = app.gateway
     t = Trimmer(app.settings.max_items)
-    params = {"depth": 1, **filters(
+    params = {"depth": 1, "offset": offset, **filters(
         ("location", location), ("vlan_group", vlan_group), ("vid", vid), ("status", status))}
     rows = await gw.list("ipam/vlans/", params, cap=app.settings.max_items + 1)
-    items = [{"vid": r.get("vid"), "name": r.get("name"), "status": disp(r.get("status")),
+    items = [{"id": r.get("id"), "vid": r.get("vid"), "name": r.get("name"), "status": disp(r.get("status")),
               "vlan_group": disp(r.get("vlan_group")), "role": disp(r.get("role")), "tenant": disp(r.get("tenant"))}
              for r in t.rows(rows)]
-    return Response.build(f"{len(items)} VLAN(s).", {"vlans": items}, scope="ipam",
-                          count=len(items), truncated=t.truncated)
+    return list_result(f"{len(items)} VLAN(s).", items, kind="vlan", scope="ipam",
+                       offset=offset, truncated=t.truncated)
 
 
 def register(mcp: FastMCP) -> None:
     register_tool(mcp, _ip_lookup, name="nautobot_ip_lookup", description=_IP_DESC, annotations=ro("IP address lookup"))
     register_tool(mcp, _prefix, name="nautobot_prefix", description=_PREFIX_DESC, annotations=ro("Prefix detail"))
     register_tool(mcp, _list_prefixes, name="nautobot_list_prefixes", description=_LIST_PREFIXES_DESC, annotations=ro("List prefixes"))
-    register_tool(mcp, _vlans, name="nautobot_vlans", description=_VLANS_DESC, annotations=ro("List VLANs"))
+    register_tool(mcp, _vlans, name="nautobot_list_vlans", description=_VLANS_DESC, annotations=ro("List VLANs"))

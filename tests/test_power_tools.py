@@ -18,8 +18,8 @@ def app(gw, max_items=200):
 async def test_query_known_type_projects():
     gw = FakeGateway(list_map={"dcim/racks/": [{"id": "r1", "name": "rack-1", "status": {"display": "Active"}}]})
     r = await _query(app(gw), "racks")
-    assert r.data["object_type"] == "racks"
-    assert r.data["results"][0] == {"id": "r1", "name": "rack-1", "status": "Active"}
+    assert r.data["object_type"] == "racks" and r.data["kind"] == "racks"
+    assert r.data["items"][0] == {"id": "r1", "name": "rack-1", "status": "Active"}
 
 
 async def test_query_unknown_type_lists_choices():
@@ -51,7 +51,7 @@ async def test_object_changes_filters_and_projects():
         {"time": "t", "action": "update", "user_name": "ops", "changed_object_type": "dcim.device",
          "object_repr": "ams01", "change_context": "web"}]})
     r = await _object_changes(app(gw), object_type="device", user="ops", days=30)
-    assert r.data["changes"][0]["object_repr"] == "ams01" and "type=device" in r.data["filters"]
+    assert r.data["items"][0]["object_repr"] == "ams01" and "type=device" in r.data["filters"]
 
 
 async def test_config_context():

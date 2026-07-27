@@ -1,9 +1,13 @@
 """Optional P2 tools: `nautobot_jobs`, `nautobot_circuits` (off by default)."""
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+from typing import Annotated
 
-from .._shared import AppContext, Response, ToolResult, Trimmer, disp, filters, register_tool, ro
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+from .._params import OptLocation, OptOffset
+from .._shared import AppContext, ToolResult, Trimmer, disp, filters, list_result, register_tool, ro
 
 _JOBS_DESC = (
     "Recent Nautobot job results (automation runs): name, status, start/finish, user, and log "
@@ -15,7 +19,11 @@ _CIRCUITS_DESC = (
 )
 
 
-async def _jobs(app: AppContext, status: str | None = None, limit: int = 20) -> ToolResult:
+async def _jobs(
+    app: AppContext,
+    status: Annotated[str | None, Field(description="Filter by job-result status, e.g. 'SUCCESS', 'FAILURE'.")] = None,
+    limit: Annotated[int, Field(description="Maximum job results to return.", ge=1)] = 20,
+) -> ToolResult:
     gw = app.gateway
     t = Trimmer(min(limit, app.settings.max_items))
     params: dict = {"depth": 1, "ordering": "-date_created"}
@@ -23,25 +31,32 @@ async def _jobs(app: AppContext, status: str | None = None, limit: int = 20) -> 
         params["status"] = status
     rows = await gw.list("extras/job-results/", params, cap=min(limit, app.settings.max_items) + 1)
     items = [{
-        "name": r.get("name"), "status": disp(r.get("status")), "date_created": r.get("date_created"),
-        "date_done": r.get("date_done"), "user": disp(r.get("user")),
+        "id": r.get("id"), "name": r.get("name"), "status": disp(r.get("status")),
+        "date_created": r.get("date_created"), "date_done": r.get("date_done"), "user": disp(r.get("user")),
         "logs": {"error": r.get("error_log_count"), "warning": r.get("warning_log_count"),
                  "success": r.get("success_log_count")},
     } for r in t.rows(rows)]
-    return Response.build(f"{len(items)} recent job result(s).", {"jobs": items},
-                          scope="jobs", count=len(items), truncated=t.truncated)
+    return list_result(f"{len(items)} recent job result(s).", items, kind="job_result",
+                       scope="jobs", truncated=t.truncated)
 
 
-async def _circuits(app: AppContext, provider: str | None = None, location: str | None = None,
-                    status: str | None = None) -> ToolResult:
+async def _circuits(
+    app: AppContext,
+    provider: Annotated[str | None, Field(description="Filter by circuit provider NAME, e.g. 'NTT', 'Lumen'.")] = None,
+    location: OptLocation = None,
+    status: Annotated[str | None, Field(description="Filter by circuit status NAME, e.g. 'Active'.")] = None,
+    offset: OptOffset = 0,
+) -> ToolResult:
     gw = app.gateway
     t = Trimmer(app.settings.max_items)
-    params = {"depth": 1, **filters(("provider", provider), ("location", location), ("status", status))}
+    params = {"depth": 1, "offset": offset,
+              **filters(("provider", provider), ("location", location), ("status", status))}
     rows = await gw.list("circuits/circuits/", params, cap=app.settings.max_items + 1)
-    items = [{"cid": r.get("cid"), "provider": disp(r.get("provider")), "type": disp(r.get("circuit_type")),
-              "status": disp(r.get("status")), "tenant": disp(r.get("tenant"))} for r in t.rows(rows)]
-    return Response.build(f"{len(items)} circuit(s).", {"circuits": items},
-                          scope="circuits", count=len(items), truncated=t.truncated)
+    items = [{"id": r.get("id"), "cid": r.get("cid"), "provider": disp(r.get("provider")),
+              "type": disp(r.get("circuit_type")), "status": disp(r.get("status")),
+              "tenant": disp(r.get("tenant"))} for r in t.rows(rows)]
+    return list_result(f"{len(items)} circuit(s).", items, kind="circuit", scope="circuits",
+                       offset=offset, truncated=t.truncated)
 
 
 _LIFECYCLE_DESC = (
@@ -51,7 +66,10 @@ _LIFECYCLE_DESC = (
 )
 
 
-async def _lifecycle_report(app: AppContext, location: str | None = None, days_ahead: int = 0) -> ToolResult:
+async def _lifecycle_report(
+    app: AppContext, location: OptLocation = None,
+    days_ahead: Annotated[int, Field(description="Look-ahead window in days; 0 = already past end-of-support.", ge=0)] = 0,
+) -> ToolResult:
     from datetime import datetime, timedelta, timezone
     gw = app.gateway
     t = Trimmer(app.settings.max_items)
@@ -60,11 +78,11 @@ async def _lifecycle_report(app: AppContext, location: str | None = None, days_a
     if location:
         params["location"] = location
     rows = await gw.list("dcim/devices/", params, cap=app.settings.max_items + 1)
-    items = [{"name": r.get("name"), "software_version": disp(r.get("software_version")),
+    items = [{"id": r.get("id"), "name": r.get("name"), "software_version": disp(r.get("software_version")),
               "location": disp(r.get("location")), "role": disp(r.get("role"))} for r in t.rows(rows)]
     scope = f"location:{location}" if location else "org"
-    return Response.build(f"{len(items)} device(s) past software end-of-support (as of {cutoff}) [{scope}].",
-                          {"cutoff": cutoff, "devices": items}, scope=scope, count=len(items), truncated=t.truncated)
+    return list_result(f"{len(items)} device(s) past software end-of-support (as of {cutoff}) [{scope}].",
+                       items, kind="device", scope=scope, truncated=t.truncated, extra={"cutoff": cutoff})
 
 
 def register(mcp: FastMCP) -> None:

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 from mcp.server.fastmcp import FastMCP
 
+from .completions import register_completions
 from .config import Settings, get_settings
 from .context import AppContext, clear_process_app, set_process_app
 from .core.gateway import NautobotGateway
@@ -61,6 +62,7 @@ def build_server(settings: Settings | None = None) -> FastMCP:
     register_all(mcp, s)
     register_resources(mcp, s)
     register_prompts(mcp, s)
+    register_completions(mcp, s)
     return mcp
 
 

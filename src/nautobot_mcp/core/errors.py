@@ -22,6 +22,9 @@ class ResolutionError(Exception):
 
 
 class AmbiguousTarget(ResolutionError):
+    # Design decision: carry candidate `choices` so the caller self-corrects. We deliberately
+    # do NOT use MCP elicitation here — it's an optional client capability and this server is
+    # read-only; choices work for every client and let an LLM agent resolve without a round-trip.
     kind = ErrorKind.AMBIGUOUS_TARGET
 
 
@@ -51,3 +54,19 @@ class NautobotApiError(GatewayError):
     def __init__(self, operation: str, status: int | None, detail: str) -> None:
         super().__init__(operation, f"HTTP {status} — {detail}" if status else detail)
         self.status = status
+
+
+class NautobotValidationError(GatewayError):
+    """A 4xx the caller can fix: unknown filter field, bad value, malformed query.
+
+    Self-correcting (not a hard failure) — carries the per-field API messages so the
+    tool/LLM can adjust the request. `fields` maps offending param -> API message(s).
+    """
+
+    kind = ErrorKind.INVALID_INPUT
+
+    def __init__(self, operation: str, status: int, detail: str,
+                 fields: dict[str, Any] | None = None) -> None:
+        super().__init__(operation, f"HTTP {status} — {detail}")
+        self.status = status
+        self.fields = fields or {}

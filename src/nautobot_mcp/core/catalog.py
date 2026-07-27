@@ -75,3 +75,30 @@ CONTENT_TYPES: dict[str, str] = {
     "prefix": "ipam.prefix", "ip": "ipam.ipaddress", "ip-address": "ipam.ipaddress",
     "vlan": "ipam.vlan", "cable": "dcim.cable", "rack": "dcim.rack",
 }
+
+# Filter discoverability: Nautobot 400s on an unknown filter field but never says which are
+# valid. We surface the common, high-value filters per object type so the query tool can guide
+# the LLM (in its description and when a filter is rejected). Not exhaustive — `q` free-text
+# and object-specific fields exist too — but covers the filters infra/delivery reach for.
+BASE_FILTERS: tuple[str, ...] = ("q", "id", "name", "tag", "status", "tenant")
+
+TYPE_FILTERS: dict[str, tuple[str, ...]] = {
+    "devices": ("location", "role", "manufacturer", "device_type", "platform", "rack",
+                "serial", "has_primary_ip", "software_version"),
+    "interfaces": ("device", "device_id", "enabled", "type", "mgmt_only", "lag"),
+    "prefixes": ("location", "role", "namespace", "vrf", "vlan", "within", "within_include",
+                 "prefix_length", "ip_version"),
+    "ip-addresses": ("parent", "namespace", "vrf", "role", "type", "dns_name", "has_interface_assignments"),
+    "vlans": ("location", "vlan_group", "vid", "role"),
+    "racks": ("location", "rack_group", "role", "serial"),
+    "circuits": ("provider", "location", "circuit_type", "cid"),
+    "virtual-machines": ("cluster", "location", "role", "platform", "status"),
+    "cables": ("device", "location", "type", "termination_a_type"),
+    "config-compliance": ("device", "device__location", "compliance", "rule"),
+    "cves": ("severity", "status", "affected_softwares"),
+}
+
+
+def filters_for(object_type: str) -> list[str]:
+    """Common valid filter names for an object type (base + type-specific), sorted."""
+    return sorted(set(BASE_FILTERS) | set(TYPE_FILTERS.get(object_type, ())))

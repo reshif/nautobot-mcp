@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from ._params import Location
 from ._shared import AppContext, Collector, Response, ToolResult, disp, ref, register_tool, ro
 
 _DESC = (
@@ -13,7 +14,7 @@ _DESC = (
 )
 
 
-async def _location(app: AppContext, location: str) -> ToolResult:
+async def _location(app: AppContext, location: Location) -> ToolResult:
     gw = app.gateway
     loc = await app.resolver.one("location", location, depth=1)
     c = Collector()

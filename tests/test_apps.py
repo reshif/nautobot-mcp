@@ -3,16 +3,45 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from nautobot_mcp.core.errors import NautobotValidationError
 from nautobot_mcp.core.resolver import Resolver
 from nautobot_mcp.tools.graphql import _graphql_schema
-from nautobot_mcp.tools.optional.golden_config import _config_compliance, _device_config
-from nautobot_mcp.tools.query import OBJECT_TYPES
+from nautobot_mcp.tools.optional.golden_config import _config_compliance, _config_search, _device_config
+from nautobot_mcp.tools.query import OBJECT_TYPES, _query
 from tests.fakes import FakeGateway
 
 
 def app(gw, max_items=200):
     return SimpleNamespace(gateway=gw, resolver=Resolver(gw, 120),
                            settings=SimpleNamespace(max_items=max_items, max_response_chars=60000))
+
+
+async def test_query_bad_filter_returns_valid_filters():
+    def boom(_params):
+        raise NautobotValidationError("GET dcim/devices/", 400, '{"site":["Unknown filter field"]}',
+                                      {"site": ["Unknown filter field"]})
+
+    gw = FakeGateway(list_map={"dcim/devices/": boom})
+    r = await _query(app(gw), "devices", filters={"site": "AMS01"})
+    assert r.error is not None and r.error.kind.value == "invalid_input"
+    valid = {c["valid_filter"] for c in r.error.choices}
+    assert "location" in valid and "role" in valid  # tells the LLM the real filter names
+
+
+async def test_query_paginates_with_offset():
+    rows = [{"id": f"d{i}", "name": f"dev{i}"} for i in range(3)]
+    gw = FakeGateway(list_map={"dcim/devices/": rows})
+    r = await _query(app(gw, max_items=2), "devices")
+    assert r.data["count"] == 2 and r.meta.truncated and r.data["next_offset"] == 2
+
+
+async def test_config_search_finds_matching_devices():
+    gw = FakeGateway(list_map={"plugins/golden-config/golden-config/": [
+        {"device": {"display": "d1"}, "backup_config": "hostname d1\nsnmp-server community public\n"},
+        {"device": {"display": "d2"}, "backup_config": "hostname d2\nno snmp\n"}]})
+    r = await _config_search(app(gw), pattern="snmp-server community", kind="backup")
+    assert r.data["count"] == 1 and r.data["items"][0]["device"] == "d1"
+    assert "community public" in r.data["items"][0]["line"]
 
 
 def test_query_object_types_include_plugin_apps():

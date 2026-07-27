@@ -14,11 +14,14 @@ from typing import Any
 
 import httpx
 
-from .errors import NautobotApiError, NautobotTimeoutError
+from .errors import NautobotApiError, NautobotTimeoutError, NautobotValidationError
 from .observability import get_logger
 from .pagination import PAGE_LIMIT
 
 _logger = get_logger(__name__)
+
+# 4xx statuses that mean "the caller can fix the request" (vs a server/transport failure)
+_VALIDATION_STATUS = frozenset({400, 422})
 
 
 # status codes worth one automatic retry (transient upstream/proxy conditions)
@@ -67,6 +70,9 @@ class NautobotGateway:
                     if status in _RETRY_STATUS and attempt < attempts:
                         await self._backoff(operation, attempt, f"http_{status}")
                         continue
+                    if status in _VALIDATION_STATUS:  # caller can fix it — self-correcting, don't retry
+                        fields = _fields(exc.response)
+                        raise NautobotValidationError(operation, status, _detail(exc.response), fields) from exc
                     _logger.warning("nautobot.api_error", extra={"operation": operation, "status": status})
                     raise NautobotApiError(operation, status, _detail(exc.response)) from exc
                 except httpx.HTTPError as exc:
@@ -122,3 +128,12 @@ def _detail(resp: httpx.Response) -> str:
         return str(body)[:200]
     except Exception:
         return (resp.text or "")[:200]
+
+
+def _fields(resp: httpx.Response) -> dict[str, Any]:
+    """Per-field validation messages from a 4xx body, e.g. {'site': ['Unknown filter field']}."""
+    try:
+        body = resp.json()
+        return {k: v for k, v in body.items() if k != "detail"} if isinstance(body, dict) else {}
+    except Exception:
+        return {}
