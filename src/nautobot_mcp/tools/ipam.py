@@ -6,6 +6,7 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
+from ..core.errors import AmbiguousTarget, TargetNotFound
 from ._params import OptLocation, OptOffset, OptRole, OptStatus, OptTenant
 from ._shared import (
     AppContext,
@@ -37,6 +38,11 @@ _LIST_PREFIXES_DESC = (
 _VLANS_DESC = (
     "List VLANs, filtered by location, VLAN group, VID, or status. Use for 'what VLANs are at "
     "<site>?' or to find a VLAN by number/name."
+)
+_VLAN_DESC = (
+    "Detail for ONE VLAN: status, VLAN group, role, tenant, location, and the prefixes/subnets "
+    "mapped to it. Pass the VLAN name or its VID number. Use for 'tell me about VLAN 100' or "
+    "'what subnets are on the voice VLAN?'. For a list of VLANs use nautobot_list_vlans."
 )
 
 
@@ -139,8 +145,40 @@ async def _vlans(
                        offset=offset, truncated=t.truncated)
 
 
+async def _vlan(
+    app: AppContext,
+    vlan: Annotated[str, Field(description="VLAN name (e.g. 'voice') or VID number (e.g. '100').")],
+) -> ToolResult:
+    gw = app.gateway
+    q = vlan.strip()
+    if q.isdigit():
+        rows = await gw.list("ipam/vlans/", {"vid": int(q), "depth": 1}, cap=25)
+    else:
+        rows = await app.resolver.lookup("ipam/vlans/", q, depth=1, cap=25)
+    if not rows:
+        raise TargetNotFound(f"No VLAN matched '{vlan}'.")
+    if len(rows) > 1:  # VID isn't globally unique — let the caller pick
+        raise AmbiguousTarget(
+            f"'{vlan}' matched {len(rows)} VLANs.",
+            [{"id": r.get("id"), "display": f"VID {r.get('vid')} {r.get('name')} ({disp(r.get('vlan_group'))})"}
+             for r in rows[:25]],
+        )
+    v = rows[0]
+    prefixes = await gw.list("ipam/prefixes/", {"vlan_id": v["id"], "depth": 0}, cap=app.settings.max_items)
+    data = {
+        "vid": v.get("vid"), "name": v.get("name"), "status": disp(v.get("status")),
+        "vlan_group": disp(v.get("vlan_group")), "role": disp(v.get("role")), "tenant": disp(v.get("tenant")),
+        "location": disp(v.get("location")), "prefix_count": v.get("prefix_count"),
+        "prefixes": [p.get("prefix") for p in prefixes],
+    }
+    summary = (f"VLAN {v.get('vid')} ({v.get('name')}): {disp(v.get('status'))}, "
+               f"group {disp(v.get('vlan_group')) or '—'}, {len(data['prefixes'])} prefix(es) mapped.")
+    return Response.build(summary, data, scope=f"vlan:{v.get('vid')}")
+
+
 def register(mcp: FastMCP) -> None:
     register_tool(mcp, _ip_lookup, name="nautobot_ip_lookup", description=_IP_DESC, annotations=ro("IP address lookup"))
     register_tool(mcp, _prefix, name="nautobot_prefix", description=_PREFIX_DESC, annotations=ro("Prefix detail"))
     register_tool(mcp, _list_prefixes, name="nautobot_list_prefixes", description=_LIST_PREFIXES_DESC, annotations=ro("List prefixes"))
     register_tool(mcp, _vlans, name="nautobot_list_vlans", description=_VLANS_DESC, annotations=ro("List VLANs"))
+    register_tool(mcp, _vlan, name="nautobot_vlan", description=_VLAN_DESC, annotations=ro("VLAN detail"))

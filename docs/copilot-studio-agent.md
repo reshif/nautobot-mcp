@@ -30,7 +30,7 @@ Read this first — it changes how the description and instructions are written.
   conversational/output rules. Keep instructions short.
 
 Copilot Studio currently surfaces MCP **tools and resources** (not MCP prompts). Our four
-`nautobot://…` resources appear as agent knowledge; all 30 tools appear on the **Tools** page.
+`nautobot://…` resources appear as agent knowledge; all 31 tools appear on the **Tools** page.
 
 ---
 
@@ -235,7 +235,7 @@ do, fix it at the source (the server) too so both the SDK client and Copilot Stu
 
 ## 8. Test & iterate (do this before sharing)
 
-1. **Turn on generative orchestration** and confirm the Tools page lists all 30 tools.
+1. **Turn on generative orchestration** and confirm the Tools page lists all 31 tools.
 2. In the **Test pane**, run each conversation starter; open the **activity map** to see which tools
    the orchestrator chose and how it filled inputs.
 3. Probe the self-correction paths:

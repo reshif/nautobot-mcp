@@ -87,13 +87,16 @@ async def _list_devices(
     app: AppContext, location: OptLocation = None, role: OptRole = None, status: OptStatus = None,
     manufacturer: Annotated[str | None, Field(description="Filter by manufacturer NAME, e.g. 'Cisco', 'Arista'.")] = None,
     model: Annotated[str | None, Field(description="Filter by device-type/model NAME, e.g. 'DCS-7280'.")] = None,
+    platform: Annotated[str | None, Field(description="Filter by platform NAME (OS family), e.g. 'Arista EOS', 'Cisco IOS'.")] = None,
+    software_version: Annotated[str | None, Field(description="Filter by running software version, e.g. '17.12.3' — answers 'which devices run version X?'.")] = None,
     offset: OptOffset = 0,
 ) -> ToolResult:
     gw = app.gateway
     t = Trimmer(app.settings.max_items)
     params = {"depth": 1, "offset": offset, **filters(
         ("location", location), ("role", role), ("status", status),
-        ("manufacturer", manufacturer), ("device_type", model))}
+        ("manufacturer", manufacturer), ("device_type", model),
+        ("platform", platform), ("software_version", software_version))}
     rows = await gw.list("dcim/devices/", params, cap=app.settings.max_items + 1)
     items = [{
         "id": r.get("id"), "name": r.get("name"), "role": disp(r.get("role")),
@@ -101,7 +104,8 @@ async def _list_devices(
         "location": disp(r.get("location")), "primary_ip4": disp(r.get("primary_ip4")),
     } for r in t.rows(rows)]
     scope = ", ".join(f"{k}={v}" for k, v in (("location", location), ("role", role), ("status", status),
-                      ("manufacturer", manufacturer), ("model", model)) if v) or "all"
+                      ("manufacturer", manufacturer), ("model", model), ("platform", platform),
+                      ("software_version", software_version)) if v) or "all"
     return list_result(f"{len(items)} device(s) [{scope}].", items, kind="device", scope="devices",
                        offset=offset, truncated=t.truncated, extra={"filters": scope})
 

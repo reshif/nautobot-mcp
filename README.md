@@ -24,9 +24,11 @@ each as a tool would wreck LLM selection, so coverage is layered:
   (elevation + free U), `nautobot_ip_allocate` (next free IP/subnet suggestion).
 - **Sharp purpose tools** (the common intents): `nautobot_find`, `nautobot_device`,
   `nautobot_device_interfaces`, `nautobot_interface` (single-interface detail), `nautobot_device_config_context`,
-  `nautobot_cabling`, `nautobot_list_devices`, `nautobot_location`, `nautobot_ip_lookup`,
+  `nautobot_cabling`, `nautobot_list_devices` (filter by location/role/status/manufacturer/model/**platform**/**software_version**
+  — "which devices run 17.12.3?"), `nautobot_location`, `nautobot_ip_lookup`,
   `nautobot_prefix` (+ available IPs/prefixes), `nautobot_list_prefixes`, `nautobot_list_vlans`,
-  `nautobot_vlan_allocate` (next free VID), `nautobot_status_overview`, `nautobot_object_changes` (SoT audit log).
+  `nautobot_vlan` (single-VLAN detail + mapped prefixes), `nautobot_vlan_allocate` (next free VID),
+  `nautobot_status_overview`, `nautobot_object_changes` (SoT audit log).
 - **Optional (flagged, network-automation apps):** `nautobot_jobs`, `nautobot_circuits`,
   `nautobot_lifecycle_report` (EoX/end-of-support, Device Lifecycle app), and the Golden Config
   layer — `nautobot_config_compliance` (per-device or per-site compliance), `nautobot_device_config`
@@ -39,9 +41,11 @@ each as a tool would wreck LLM selection, so coverage is layered:
 (not a hard failure); `nautobot_query` **defers to the sharp tools** when one exists.
 
 **Resources:** `nautobot://locations`, `nautobot://device-roles`, `nautobot://statuses`,
-`nautobot://manufacturers` (titled). **Prompts:** `/find`, `/device_report`, `/ip_lookup`,
-`/site_inventory`, with **argument completion** — `location`/`device` args autocomplete from live
-Nautobot data. Every tool + power endpoint was **validated live against demo.nautobot.com**.
+`nautobot://manufacturers` (titled). **Prompts (12 playbooks):** `/find`, `/device_report`,
+`/ip_lookup`, `/site_inventory`, `/data_quality`, `/device_readiness`, `/prefix_report`,
+`/vlan_report`, `/connectivity`, `/capacity`, `/change_history`, `/compliance_check` — with
+**argument completion** (`location`/`device` autocomplete from live Nautobot data). Every tool +
+power endpoint was **validated live against demo.nautobot.com**.
 
 **LLM-facing conformance (MCP SDK):** every tool parameter carries a `Field(description=…)` and
 closed sets are `Literal` enums, so the generated `inputSchema` guides the model on every argument;

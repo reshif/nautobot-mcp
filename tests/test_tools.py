@@ -7,7 +7,7 @@ from nautobot_mcp.core.errors import AmbiguousTarget, TargetNotFound
 from nautobot_mcp.core.resolver import Resolver
 from nautobot_mcp.tools.devices import _device, _interface, _list_devices
 from nautobot_mcp.tools.find import _find
-from nautobot_mcp.tools.ipam import _ip_lookup
+from nautobot_mcp.tools.ipam import _ip_lookup, _vlan
 from nautobot_mcp.tools.overview import _status_overview
 from tests.fakes import FakeGateway
 
@@ -98,3 +98,38 @@ async def test_interface_not_found_self_corrects():
     gw = FakeGateway(list_map={"dcim/devices/": [{"id": "d1", "name": "ams01"}], "dcim/interfaces/": []})
     r = await _interface(app(gw), "ams01", "Nope0/0")
     assert r.error is not None and "nautobot_device_interfaces" in r.summary
+
+
+async def test_list_devices_reverse_lookup_filters():
+    captured = {}
+
+    def devs(params):
+        captured.update(params)
+        return [{"id": "d1", "name": "ams01"}]
+
+    gw = FakeGateway(list_map={"dcim/devices/": devs})
+    r = await _list_devices(app(gw), platform="Arista EOS", software_version="17.12.3")
+    assert captured.get("platform") == "Arista EOS" and captured.get("software_version") == "17.12.3"
+    assert "platform=Arista EOS" in r.data["filters"]
+
+
+async def test_vlan_detail_by_vid_with_prefixes():
+    gw = FakeGateway(list_map={
+        "ipam/vlans/": [{"id": "v1", "vid": 100, "name": "voice", "status": {"display": "Active"},
+                         "vlan_group": {"display": "AMS-core"}, "prefix_count": 1}],
+        "ipam/prefixes/": [{"prefix": "10.0.0.0/24"}],
+    })
+    r = await _vlan(app(gw), "100")
+    assert r.data["vid"] == 100 and r.data["prefixes"] == ["10.0.0.0/24"]
+    assert "VLAN 100 (voice)" in r.summary
+
+
+async def test_vlan_ambiguous_vid_raises_with_choices():
+    gw = FakeGateway(list_map={"ipam/vlans/": [
+        {"id": "v1", "vid": 100, "name": "voice", "vlan_group": {"display": "AMS"}},
+        {"id": "v2", "vid": 100, "name": "voice", "vlan_group": {"display": "LON"}}]})
+    try:
+        await _vlan(app(gw), "100")
+        raise AssertionError("expected ambiguous")
+    except AmbiguousTarget as e:
+        assert len(e.choices) == 2

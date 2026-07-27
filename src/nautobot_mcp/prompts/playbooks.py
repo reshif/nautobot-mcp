@@ -44,3 +44,43 @@ def register_prompts(mcp: FastMCP, _settings: Settings) -> None:
     def device_readiness(device: str) -> str:
         return (f"{_HOUSE}\nCheck deployment readiness for '{device}': nautobot_device_readiness('{device}'). "
                 "Report GO/NO-GO with the specific missing documentation, and note recent changes.")
+
+    @mcp.prompt(title="Prefix / subnet report")
+    def prefix_report(prefix: str) -> str:
+        return (f"{_HOUSE}\nReport on prefix '{prefix}': nautobot_prefix('{prefix}'). State status, role, "
+                "namespace/VRF, VLAN, the IP count and child prefixes, and the first free IP(s). If it's nearly "
+                "full, say so.")
+
+    @mcp.prompt(title="VLAN report")
+    def vlan_report(vlan: str) -> str:
+        return (f"{_HOUSE}\nReport on VLAN '{vlan}': nautobot_vlan('{vlan}'). Give its VID, name, status, group, "
+                "role, and the prefixes/subnets mapped to it. If the name/VID is ambiguous, ask which one.")
+
+    @mcp.prompt(title="What is it connected to?")
+    def connectivity(device: str) -> str:
+        return (f"{_HOUSE}\nShow the physical connectivity of '{device}': nautobot_cabling('{device}'). List each "
+                "cabled interface, the remote device/port, and reachability. For a specific port use "
+                "nautobot_interface('{device}', <name>).")
+
+    @mcp.prompt(title="Find free capacity")
+    def capacity(prefix: str = "", location: str = "") -> str:
+        pf = f"the next free IPs and child blocks in '{prefix}' with nautobot_ip_allocate('{prefix}')" if prefix else ""
+        vl = f"the next free VLAN ID at '{location}' with nautobot_vlan_allocate(location='{location}')" if location else ""
+        want = " and ".join(x for x in (pf, vl) if x) or "free IP space (ask for a prefix) or a free VLAN (ask for a site/group)"
+        return (f"{_HOUSE}\nSuggest {want}. These are read-only suggestions — the user must reserve them in "
+                "Nautobot to make them authoritative.")
+
+    @mcp.prompt(title="Recent changes")
+    def change_history(object_type: str = "", days: str = "7") -> str:
+        scope = f" to {object_type}" if object_type else ""
+        return (f"{_HOUSE}\nSummarize source-of-truth changes{scope} in the last {days} days: "
+                f"nautobot_object_changes(object_type='{object_type}', days={days}). Report who changed what, "
+                "when, and the action, newest first.")
+
+    @mcp.prompt(title="Config compliance check")
+    def compliance_check(device: str = "", location: str = "") -> str:
+        target = f"device '{device}'" if device else (f"site '{location}'" if location else "the org")
+        arg = f"device='{device}'" if device else (f"location='{location}'" if location else "")
+        return (f"{_HOUSE}\nCheck Golden Config compliance for {target}: nautobot_config_compliance({arg}). "
+                "Report which features are non-compliant and the remediation. (Requires the Golden Config app / "
+                "optional tools enabled.)")
